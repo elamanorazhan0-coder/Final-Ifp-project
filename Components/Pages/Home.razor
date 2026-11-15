@@ -1,0 +1,103 @@
+@page "/"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject AutoCareService AutoCare
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Overview · AutoCare</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <div class="eyebrow">@DateTime.Today.ToString("dddd, MMMM d, yyyy").ToUpperInvariant()</div>
+        <h1>Good to see you, @displayName</h1>
+        <p class="muted">Here’s what’s happening at your workshop today.</p>
+    </div>
+    @if (isAdmin)
+    {
+        <a class="btn btn-primary" href="/appointments">＋ New appointment</a>
+    }
+</div>
+
+<div class="stat-grid">
+    @if (isAdmin)
+    {
+        <article class="stat-card"><span class="stat-label">Appointments</span><strong>@summary.TotalAppointments</strong><span class="stat-note">Upcoming and active</span></article>
+        <article class="stat-card"><span class="stat-label">Active repairs</span><strong>@summary.ActiveRepairs</strong><span class="stat-note">Needs workshop attention</span></article>
+        <article class="stat-card"><span class="stat-label">Completed repairs</span><strong>@summary.CompletedRepairs</strong><span class="stat-note">All-time completed</span></article>
+        <article class="stat-card @(summary.LowStockParts > 0 ? "stat-warning" : "")"><span class="stat-label">Low stock</span><strong>@summary.LowStockParts</strong><span class="stat-note">Parts at or below minimum</span></article>
+    }
+    else
+    {
+        <article class="stat-card"><span class="stat-label">My open jobs</span><strong>@summary.AssignedRepairs</strong><span class="stat-note">Assigned to your account</span></article>
+        <article class="stat-card"><span class="stat-label">Today's appointments</span><strong>@summary.TodayAppointments</strong><span class="stat-note">@DateTime.Today.ToString("dddd, MMM d")</span></article>
+        <article class="stat-card"><span class="stat-label">Work in progress</span><strong>@myActive</strong><span class="stat-note">Currently in progress</span></article>
+        <article class="stat-card"><span class="stat-label">Recently completed</span><strong>@myCompleted</strong><span class="stat-note">Completed this month</span></article>
+    }
+</div>
+
+<div class="panel">
+    <div class="panel-heading">
+        <div><h2>@(isAdmin ? "Upcoming appointments" : "My repair jobs")</h2><p class="muted">@(isAdmin ? "Next visits scheduled at the workshop" : "Your assigned work and current status")</p></div>
+        <a class="text-link" href="@(isAdmin ? "/appointments" : "/repairs")">View all <span aria-hidden="true">→</span></a>
+    </div>
+    @if (upcoming.Count == 0)
+    {
+        <div class="empty-state"><span class="empty-icon">◷</span><strong>Nothing scheduled yet</strong><p>New work will appear here when it is added.</p></div>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead><tr><th>Vehicle / customer</th><th>Service</th><th>Date</th><th>Assigned mechanic</th><th>Status</th></tr></thead>
+                <tbody>
+                    @foreach (var appointment in upcoming)
+                    {
+                        <tr>
+                            <td><strong>@appointment.Vehicle.Make @appointment.Vehicle.Model</strong><small>@appointment.Customer.Name · @appointment.Vehicle.RegistrationNumber</small></td>
+                            <td>@appointment.RequestedService</td>
+                            <td>@appointment.StartsAt.ToString("MMM d · h:mm tt")</td>
+                            <td>@(appointment.Mechanic?.DisplayName ?? "Unassigned")</td>
+                            <td><StatusBadge Value="@appointment.Status.ToString()" /></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private DashboardSummary summary = new(0, 0, 0, 0, 0, 0);
+    private List<Appointment> upcoming = [];
+    private string displayName = "there";
+    private string? userId;
+    private bool isAdmin;
+    private int myActive;
+    private int myCompleted;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+        userId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        displayName = user.Identity?.Name?.Split('@')[0] ?? "there";
+        isAdmin = user.IsInRole(DemoDataSeeder.AdministratorRole);
+        summary = await AutoCare.GetDashboardAsync(isAdmin ? null : userId);
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var appointments = db.Appointments
+            .Include(item => item.Customer)
+            .Include(item => item.Vehicle)
+            .Include(item => item.Mechanic)
+            .Where(item => item.Status != AppointmentStatus.Cancelled);
+        upcoming = isAdmin
+            ? await appointments.Where(item => item.StartsAt >= DateTime.Today).OrderBy(item => item.StartsAt).Take(6).ToListAsync()
+            : await appointments.Where(item => item.MechanicId == userId && item.StartsAt.Date == DateTime.Today).OrderBy(item => item.StartsAt).Take(6).ToListAsync();
+
+        if (!isAdmin && userId is not null)
+        {
+            myActive = await db.RepairOrders.CountAsync(item => item.MechanicId == userId && item.Status == RepairStatus.InProgress);
+            myCompleted = await db.RepairOrders.CountAsync(item => item.MechanicId == userId && item.CompletedAt >= DateTime.UtcNow.AddDays(-30));
+        }
+    }
+}

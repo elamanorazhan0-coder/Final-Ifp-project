@@ -1,0 +1,30 @@
+@inherits LayoutComponentBase
+
+<div class="shell">
+    <aside class="sidebar">
+        <NavMenu />
+    </aside>
+    <section class="workspace">
+        <header class="topbar">
+            <span class="eyebrow">AUTOCARE WORKSHOP</span>
+            <AuthorizeView>
+                <Authorized>
+                    <span class="user-chip"><span class="user-dot"></span>@context.User.Identity?.Name</span>
+                    <form class="mobile-signout" action="Account/Logout" method="post">
+                        <AntiforgeryToken />
+                        <input type="hidden" name="ReturnUrl" value="/" />
+                        <button type="submit">Sign out</button>
+                    </form>
+                </Authorized>
+            </AuthorizeView>
+        </header>
+        <main class="content">
+            @Body
+        </main>
+    </section>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    Something went wrong. <a href="." class="reload">Reload the page</a>
+    <button class="dismiss" aria-label="Dismiss">×</button>
+</div>

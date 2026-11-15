@@ -1,0 +1,112 @@
+@page "/repairs/{Id:int}"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AutoCareService AutoCare
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Repair order · AutoCare</PageTitle>
+<a href="/repairs" class="back-link">← All repair orders</a>
+@if (order is null)
+{
+    <div class="panel empty-state"><strong>Repair order not found</strong></div>
+}
+else
+{
+    <div class="page-heading">
+        <div><div class="eyebrow">REPAIR ORDER #RO-@order.Id.ToString("D4")</div><h1>@order.Vehicle.Make @order.Vehicle.Model</h1><p class="muted">@order.Vehicle.RegistrationNumber · @order.Vehicle.Customer.Name</p></div>
+        <StatusBadge Value="@order.Status.ToString()" />
+    </div>
+    @if (!string.IsNullOrWhiteSpace(message)) { <div class="alert alert-success">@message</div> }
+    @if (!string.IsNullOrWhiteSpace(error)) { <div class="alert alert-danger" role="alert">@error</div> }
+    <div class="detail-grid">
+        <section class="panel">
+            <div class="panel-heading"><div><h2>Repair details</h2><p class="muted">Assigned mechanic: @(order.Mechanic?.DisplayName ?? "Unassigned")</p></div></div>
+            <dl class="detail-list">
+                <dt>Diagnosis</dt><dd>@(string.IsNullOrWhiteSpace(order.Diagnosis) ? "Not recorded" : order.Diagnosis)</dd>
+                <dt>Work description</dt><dd>@(string.IsNullOrWhiteSpace(order.WorkDescription) ? "Not recorded" : order.WorkDescription)</dd>
+                <dt>Opened</dt><dd>@order.CreatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</dd>
+                <dt>Completed</dt><dd>@(order.CompletedAt?.ToLocalTime().ToString("MMM d, yyyy h:mm tt") ?? "—")</dd>
+            </dl>
+        </section>
+        <section class="panel cost-panel">
+            <div class="panel-heading"><div><h2>Cost summary</h2><p class="muted">Part prices are saved at the time of use.</p></div></div>
+            <div class="cost-row"><span>Labor</span><strong>@order.LaborCost.ToString("C")</strong></div>
+            <div class="cost-row"><span>Parts</span><strong>@order.PartsCost.ToString("C")</strong></div>
+            <div class="cost-total"><span>Total</span><strong>@order.TotalCost.ToString("C")</strong></div>
+        </section>
+    </div>
+    <section class="panel">
+        <div class="panel-heading"><div><h2>Parts used</h2><p class="muted">Stock is reduced in the same database transaction.</p></div></div>
+        @if (order.Parts.Count == 0) { <div class="empty-state compact-empty"><strong>No parts recorded</strong></div> }
+        else
+        {
+            <div class="table-wrap"><table class="data-table"><thead><tr><th>Part</th><th>SKU</th><th>Quantity</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>
+                @foreach (var item in order.Parts) { <tr><td>@item.Part.Name</td><td><span class="code-chip">@item.Part.Sku</span></td><td>@item.Quantity</td><td>@item.UnitPrice.ToString("C")</td><td>@((item.Quantity * item.UnitPrice).ToString("C"))</td></tr> }
+            </tbody></table></div>
+        }
+        @if (canUpdate && order.Status is not (RepairStatus.Completed or RepairStatus.Cancelled))
+        {
+            <EditForm Model="partForm" OnValidSubmit="UsePartAsync" class="inline-form">
+                <DataAnnotationsValidator />
+                <div><label class="form-label" for="part">Part</label><InputSelect id="part" class="form-select" @bind-Value="partForm.PartId"><option value="0">Choose available stock</option>@foreach (var part in availableParts) { <option value="@part.Id">@part.Name · @part.Quantity in stock · @part.UnitPrice.ToString("C")</option> }</InputSelect></div>
+                <div><label class="form-label" for="quantity">Quantity</label><InputNumber id="quantity" class="form-control" @bind-Value="partForm.Quantity" /></div>
+                <button class="btn btn-primary" type="submit">Record parts used</button>
+            </EditForm>
+        }
+    </section>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+    private RepairOrder? order;
+    private List<Part> availableParts = [];
+    private PartForm partForm = new();
+    private bool canUpdate;
+    private string userId = "";
+    private bool isAdmin;
+    private string? message;
+    private string? error;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+        userId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "";
+        isAdmin = user.IsInRole(DemoDataSeeder.AdministratorRole);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        order = await db.RepairOrders.Include(item => item.Vehicle).ThenInclude(item => item.Customer)
+            .Include(item => item.Mechanic).Include(item => item.Parts).ThenInclude(item => item.Part)
+            .SingleOrDefaultAsync(item => item.Id == Id);
+        if (order is null) return;
+        canUpdate = isAdmin || order.MechanicId == userId;
+        availableParts = await db.Parts.Where(part => part.Quantity > 0).OrderBy(part => part.Name).ToListAsync();
+    }
+
+    private async Task UsePartAsync()
+    {
+        message = error = null;
+        if (order is null || partForm.PartId == 0) { error = "Choose a part."; return; }
+        try
+        {
+            await AutoCare.UsePartAsync(order.Id, partForm.PartId, partForm.Quantity, userId, isAdmin);
+            message = "Part usage recorded and inventory updated.";
+            partForm = new PartForm();
+            await LoadAsync();
+        }
+        catch (InvalidOperationException exception) { error = exception.Message; }
+        catch (UnauthorizedAccessException exception) { error = exception.Message; }
+    }
+
+    private sealed class PartForm
+    {
+        [Range(1, int.MaxValue, ErrorMessage = "Choose a part.")]
+        public int PartId { get; set; }
+        [Range(1, 1000000)]
+        public int Quantity { get; set; } = 1;
+    }
+}

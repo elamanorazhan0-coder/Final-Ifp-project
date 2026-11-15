@@ -1,0 +1,200 @@
+@page "/appointments"
+@rendermode InteractiveServer
+@attribute [Authorize(Roles = DemoDataSeeder.AdministratorRole)]
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AutoCareService AutoCare
+@inject UserManager<ApplicationUser> UserManager
+@inject IJSRuntime JS
+
+<PageTitle>Appointments · AutoCare</PageTitle>
+<div class="page-heading">
+    <div><div class="eyebrow">SCHEDULING</div><h1>Appointments</h1><p class="muted">Plan service visits and keep mechanic schedules conflict-free.</p></div>
+    <button class="btn btn-primary" @onclick="StartNew">＋ New appointment</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert alert-success">@message</div>
+}
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger" role="alert">@error</div>
+}
+
+<div class="content-grid">
+    <section class="panel">
+        <div class="panel-heading"><div><h2>Scheduled visits</h2><p class="muted">@appointments.Count appointment(s)</p></div></div>
+        @if (appointments.Count == 0)
+        {
+            <div class="empty-state"><strong>No appointments yet</strong><p>Create the first service visit using the form.</p></div>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="data-table">
+                    <thead><tr><th>Customer / vehicle</th><th>Service</th><th>When</th><th>Mechanic</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var item in appointments)
+                        {
+                            <tr>
+                                <td><strong>@item.Customer.Name</strong><small>@item.Vehicle.Make @item.Vehicle.Model · @item.Vehicle.RegistrationNumber</small></td>
+                                <td>@item.RequestedService</td>
+                                <td>@item.StartsAt.ToString("MMM d, yyyy · h:mm tt")</td>
+                                <td>@(item.Mechanic?.DisplayName ?? "Unassigned")</td>
+                                <td><StatusBadge Value="@item.Status.ToString()" /></td>
+                                <td class="actions">
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(item)">Edit</button>
+                                    @if (item.Status != AppointmentStatus.Cancelled && item.Status != AppointmentStatus.Completed)
+                                    {
+                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => SetStatusAsync(item.Id, AppointmentStatus.Cancelled)">Cancel</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="panel form-panel">
+        <div class="panel-heading"><div><h2>@(form.Id == 0 ? "Book a visit" : "Edit appointment")</h2><p class="muted">Required fields are marked in the form.</p></div></div>
+        <EditForm Model="form" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+            <label class="form-label" for="vehicle">Customer vehicle</label>
+            <InputSelect id="vehicle" class="form-select" @bind-Value="form.VehicleId">
+                <option value="0">Choose a vehicle</option>
+                @foreach (var vehicle in vehicles)
+                {
+                    <option value="@vehicle.Id">@vehicle.Customer.Name — @vehicle.Make @vehicle.Model (@vehicle.RegistrationNumber)</option>
+                }
+            </InputSelect>
+            <label class="form-label" for="service">Requested service</label>
+            <InputText id="service" class="form-control" @bind-Value="form.RequestedService" />
+            <ValidationMessage For="() => form.RequestedService" />
+            <label class="form-label" for="date">Date and time</label>
+            <InputDate id="date" class="form-control" Type="InputDateType.DateTimeLocal" @bind-Value="form.StartsAt" />
+            <label class="form-label" for="duration">Duration (minutes)</label>
+            <InputNumber id="duration" class="form-control" @bind-Value="form.DurationMinutes" />
+            <ValidationMessage For="() => form.DurationMinutes" />
+            <label class="form-label" for="mechanic">Assign mechanic</label>
+            <InputSelect id="mechanic" class="form-select" @bind-Value="form.MechanicId">
+                <option value="">Unassigned</option>
+                @foreach (var mechanic in mechanics)
+                {
+                    <option value="@mechanic.Id">@mechanic.DisplayName (@mechanic.Email)</option>
+                }
+            </InputSelect>
+            <label class="form-label" for="status">Status</label>
+            <InputSelect id="status" class="form-select" @bind-Value="form.Status">
+                @foreach (var status in Enum.GetValues<AppointmentStatus>())
+                {
+                    <option value="@status">@StatusText.Format(status.ToString())</option>
+                }
+            </InputSelect>
+            <div class="form-actions">
+                <button class="btn btn-primary" type="submit">@(form.Id == 0 ? "Create appointment" : "Save changes")</button>
+                @if (form.Id != 0) { <button class="btn btn-light" type="button" @onclick="StartNew">Cancel edit</button> }
+            </div>
+        </EditForm>
+    </section>
+</div>
+
+@code {
+    private List<Appointment> appointments = [];
+    private List<Vehicle> vehicles = [];
+    private IList<ApplicationUser> mechanics = [];
+    private AppointmentForm form = new();
+    private string? message;
+    private string? error;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        appointments = await db.Appointments
+            .Include(item => item.Customer).Include(item => item.Vehicle).Include(item => item.Mechanic)
+            .OrderByDescending(item => item.StartsAt).ToListAsync();
+        vehicles = await db.Vehicles.Include(item => item.Customer).OrderBy(item => item.RegistrationNumber).ToListAsync();
+        mechanics = await UserManager.GetUsersInRoleAsync(DemoDataSeeder.MechanicRole);
+    }
+
+    private void StartNew()
+    {
+        form = new AppointmentForm { StartsAt = DateTime.Now.AddDays(1).Date.AddHours(9) };
+        message = error = null;
+    }
+
+    private void Edit(Appointment item)
+    {
+        form = new AppointmentForm
+        {
+            Id = item.Id,
+            VehicleId = item.VehicleId,
+            RequestedService = item.RequestedService,
+            StartsAt = item.StartsAt,
+            DurationMinutes = item.DurationMinutes,
+            MechanicId = item.MechanicId,
+            Status = item.Status
+        };
+        message = error = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        error = message = null;
+        if (form.VehicleId == 0) { error = "Choose a customer vehicle."; return; }
+        try
+        {
+            var wasNew = form.Id == 0;
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var vehicle = await db.Vehicles.Include(item => item.Customer).SingleAsync(item => item.Id == form.VehicleId);
+            await AutoCare.SaveAppointmentAsync(new Appointment
+            {
+                Id = form.Id,
+                VehicleId = vehicle.Id,
+                CustomerId = vehicle.CustomerId,
+                RequestedService = form.RequestedService,
+                StartsAt = form.StartsAt,
+                DurationMinutes = form.DurationMinutes,
+                MechanicId = form.MechanicId,
+                Status = form.Status
+            });
+            message = wasNew ? "Appointment created." : "Appointment updated.";
+            form = new AppointmentForm { StartsAt = DateTime.Now.AddDays(1).Date.AddHours(9) };
+            await LoadAsync();
+        }
+        catch (InvalidOperationException exception) { error = exception.Message; }
+    }
+
+    private async Task SetStatusAsync(int appointmentId, AppointmentStatus status)
+    {
+        if (status == AppointmentStatus.Cancelled &&
+            !await JS.InvokeAsync<bool>("confirm", "Cancel this appointment?"))
+            return;
+        error = message = null;
+        try
+        {
+            await AutoCare.UpdateAppointmentStatusAsync(appointmentId, status);
+            message = status == AppointmentStatus.Cancelled ? "Appointment cancelled." : "Appointment status updated.";
+            await LoadAsync();
+        }
+        catch (InvalidOperationException exception) { error = exception.Message; }
+    }
+
+    private sealed class AppointmentForm
+    {
+        public int Id { get; set; }
+        [Range(1, int.MaxValue, ErrorMessage = "Choose a vehicle.")]
+        public int VehicleId { get; set; }
+        [Required, StringLength(120)]
+        public string RequestedService { get; set; } = "";
+        public DateTime StartsAt { get; set; } = DateTime.Today.AddDays(1).AddHours(9);
+        [Range(15, 480)]
+        public int DurationMinutes { get; set; } = 60;
+        public string? MechanicId { get; set; }
+        public AppointmentStatus Status { get; set; } = AppointmentStatus.Scheduled;
+    }
+}

@@ -1,0 +1,163 @@
+@page "/vehicles"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Vehicles · AutoCare</PageTitle>
+<div class="page-heading">
+    <div><div class="eyebrow">CUSTOMER RECORDS</div><h1>Vehicles</h1><p class="muted">Customer vehicles and their complete repair history.</p></div>
+</div>
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert alert-success">@message</div> }
+@if (!string.IsNullOrWhiteSpace(error)) { <div class="alert alert-danger" role="alert">@error</div> }
+
+<div class="content-grid">
+    <section class="panel">
+        <div class="panel-heading"><div><h2>Registered vehicles</h2><p class="muted">@vehicles.Count vehicle(s)</p></div>
+            <input class="form-control search-box" placeholder="Search vehicle or customer" @bind="search" @bind:event="oninput" aria-label="Search vehicles" />
+        </div>
+        @if (!FilteredVehicles.Any())
+        {
+            <div class="empty-state"><strong>No matching vehicles</strong><p>Try a different search or add a vehicle.</p></div>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="data-table">
+                    <thead><tr><th>Vehicle</th><th>Registration</th><th>Customer</th><th>Contact</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var vehicle in FilteredVehicles)
+                        {
+                            <tr>
+                                <td><strong>@vehicle.Year @vehicle.Make @vehicle.Model</strong><small>@vehicle.Notes</small></td>
+                                <td><span class="code-chip">@vehicle.RegistrationNumber</span></td>
+                                <td>@vehicle.Customer.Name</td>
+                                <td>@(vehicle.Customer.Phone ?? vehicle.Customer.Email ?? "—")</td>
+                                <td><a class="btn btn-sm btn-outline-secondary" href="/vehicles/@vehicle.Id">History</a></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <AuthorizeView Roles="Administrator" Context="administratorContext">
+        <Authorized>
+            <section class="panel form-panel">
+                <div class="panel-heading"><div><h2>Add a vehicle</h2><p class="muted">Customer details are linked to the vehicle.</p></div></div>
+                <EditForm Model="form" OnValidSubmit="SaveAsync">
+                    <DataAnnotationsValidator /><ValidationSummary />
+                    <label class="form-label" for="customerName">Customer name</label>
+                    <InputText id="customerName" class="form-control" @bind-Value="form.CustomerName" />
+                    <ValidationMessage For="() => form.CustomerName" />
+                    <label class="form-label" for="email">Email (optional)</label>
+                    <InputText id="email" class="form-control" @bind-Value="form.Email" />
+                    <ValidationMessage For="() => form.Email" />
+                    <label class="form-label" for="phone">Phone (optional)</label>
+                    <InputText id="phone" class="form-control" @bind-Value="form.Phone" />
+                    <label class="form-label" for="make">Make</label>
+                    <InputText id="make" class="form-control" @bind-Value="form.Make" />
+                    <ValidationMessage For="() => form.Make" />
+                    <label class="form-label" for="model">Model</label>
+                    <InputText id="model" class="form-control" @bind-Value="form.Model" />
+                    <ValidationMessage For="() => form.Model" />
+                    <div class="form-row">
+                        <div><label class="form-label" for="year">Year</label><InputNumber id="year" class="form-control" @bind-Value="form.Year" /></div>
+                        <div><label class="form-label" for="registration">Registration</label><InputText id="registration" class="form-control" @bind-Value="form.RegistrationNumber" /></div>
+                    </div>
+                    <ValidationMessage For="() => form.Year" /><ValidationMessage For="() => form.RegistrationNumber" />
+                    <label class="form-label" for="notes">Notes (optional)</label>
+                    <InputTextArea id="notes" class="form-control" @bind-Value="form.Notes" />
+                    <div class="form-actions"><button class="btn btn-primary" type="submit">Save vehicle</button></div>
+                </EditForm>
+            </section>
+        </Authorized>
+    </AuthorizeView>
+</div>
+
+@code {
+    private List<Vehicle> vehicles = [];
+    private VehicleForm form = new();
+    private string search = "";
+    private string? message;
+    private string? error;
+    private bool canManage;
+
+    private IEnumerable<Vehicle> FilteredVehicles => vehicles.Where(vehicle =>
+        string.IsNullOrWhiteSpace(search) ||
+        $"{vehicle.Make} {vehicle.Model} {vehicle.RegistrationNumber} {vehicle.Customer.Name}".Contains(search, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+        canManage = user.IsInRole(DemoDataSeeder.AdministratorRole);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        vehicles = await db.Vehicles.Include(item => item.Customer).OrderBy(item => item.RegistrationNumber).ToListAsync();
+    }
+
+    private async Task SaveAsync()
+    {
+        message = error = null;
+        if (!canManage) { error = "Only administrators can add vehicles."; return; }
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var customer = !string.IsNullOrWhiteSpace(form.Email)
+                ? await db.Customers.FirstOrDefaultAsync(item => item.Email == form.Email)
+                : null;
+            if (customer is null)
+            {
+                customer = new Customer { Name = form.CustomerName, Email = form.Email, Phone = form.Phone };
+                db.Customers.Add(customer);
+            }
+            else
+            {
+                customer.Name = form.CustomerName;
+                customer.Phone = form.Phone;
+            }
+            db.Vehicles.Add(new Vehicle
+            {
+                Customer = customer,
+                Make = form.Make,
+                Model = form.Model,
+                Year = form.Year,
+                RegistrationNumber = form.RegistrationNumber.Trim().ToUpperInvariant(),
+                Notes = form.Notes
+            });
+            await db.SaveChangesAsync();
+            form = new VehicleForm();
+            message = "Vehicle saved.";
+            await LoadAsync();
+        }
+        catch (DbUpdateException)
+        {
+            error = "Could not save this vehicle. Check that the registration number is unique.";
+        }
+    }
+
+    private sealed class VehicleForm
+    {
+        [Required, StringLength(100)]
+        public string CustomerName { get; set; } = "";
+        [EmailAddress, StringLength(160)]
+        public string? Email { get; set; }
+        [StringLength(30)]
+        public string? Phone { get; set; }
+        [Required, StringLength(60)]
+        public string Make { get; set; } = "";
+        [Required, StringLength(60)]
+        public string Model { get; set; } = "";
+        [Range(1950, 2100)]
+        public int Year { get; set; } = DateTime.Today.Year;
+        [Required, StringLength(20)]
+        public string RegistrationNumber { get; set; } = "";
+        [StringLength(500)]
+        public string? Notes { get; set; }
+    }
+}

@@ -1,0 +1,162 @@
+@page "/repairs"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AutoCareService AutoCare
+@inject UserManager<ApplicationUser> UserManager
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Repair orders · AutoCare</PageTitle>
+<div class="page-heading">
+    <div><div class="eyebrow">WORKSHOP OPERATIONS</div><h1>Repair orders</h1><p class="muted">Track diagnosis, assigned work, parts and repair costs.</p></div>
+    <AuthorizeView Roles="Administrator"><Authorized><button class="btn btn-primary" @onclick="() => showForm = !showForm">＋ New repair order</button></Authorized></AuthorizeView>
+</div>
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert alert-success">@message</div> }
+@if (!string.IsNullOrWhiteSpace(error)) { <div class="alert alert-danger" role="alert">@error</div> }
+
+@if (showForm && isAdmin)
+{
+    <section class="panel form-panel wide-form">
+        <div class="panel-heading"><div><h2>Create a repair order</h2><p class="muted">Choose a vehicle and assign a mechanic.</p></div></div>
+        <EditForm Model="form" OnValidSubmit="CreateAsync">
+            <DataAnnotationsValidator /><ValidationSummary />
+            <div class="form-row">
+                <div><label class="form-label" for="vehicle">Vehicle</label><InputSelect id="vehicle" class="form-select" @bind-Value="form.VehicleId"><option value="0">Choose a vehicle</option>@foreach (var vehicle in vehicles) { <option value="@vehicle.Id">@vehicle.Make @vehicle.Model — @vehicle.RegistrationNumber</option> }</InputSelect><ValidationMessage For="() => form.VehicleId" /></div>
+                <div><label class="form-label" for="mechanic">Mechanic</label><InputSelect id="mechanic" class="form-select" @bind-Value="form.MechanicId"><option value="">Unassigned</option>@foreach (var mechanic in mechanics) { <option value="@mechanic.Id">@mechanic.DisplayName</option> }</InputSelect></div>
+            </div>
+            <label class="form-label" for="diagnosis">Diagnosis</label><InputTextArea id="diagnosis" class="form-control" @bind-Value="form.Diagnosis" />
+            <label class="form-label" for="work">Work description</label><InputTextArea id="work" class="form-control" @bind-Value="form.WorkDescription" />
+            <label class="form-label" for="labor">Labor cost</label><InputNumber id="labor" class="form-control" @bind-Value="form.LaborCost" />
+            <div class="form-actions"><button class="btn btn-primary" type="submit">Create order</button><button class="btn btn-light" type="button" @onclick="() => showForm = false">Close</button></div>
+        </EditForm>
+    </section>
+}
+
+<section class="panel">
+    <div class="panel-heading"><div><h2>@(isAdmin ? "All repair orders" : "Jobs assigned to me")</h2><p class="muted">@orders.Count order(s)</p></div>
+        <select class="form-select filter-select" aria-label="Filter repair orders" @bind="statusFilter"><option value="">All statuses</option>@foreach (var status in Enum.GetValues<RepairStatus>()) { <option value="@status">@StatusText.Format(status.ToString())</option> }</select>
+    </div>
+    @if (FilteredOrders.Count == 0)
+    {
+        <div class="empty-state"><strong>No repair orders found</strong><p>Orders appear here once they are created or assigned.</p></div>
+    }
+    else
+    {
+        <div class="table-wrap"><table class="data-table">
+            <thead><tr><th>Order / vehicle</th><th>Customer</th><th>Mechanic</th><th>Diagnosis</th><th>Cost</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var order in FilteredOrders)
+                {
+                    <tr>
+                        <td><strong>#RO-@order.Id.ToString("D4")</strong><small>@order.Vehicle.Year @order.Vehicle.Make @order.Vehicle.Model · @order.Vehicle.RegistrationNumber</small></td>
+                        <td>@order.Vehicle.Customer.Name</td>
+                        <td>@(order.Mechanic?.DisplayName ?? "Unassigned")</td>
+                        <td>@(string.IsNullOrWhiteSpace(order.Diagnosis) ? "—" : order.Diagnosis)</td>
+                        <td>@order.TotalCost.ToString("C")</td>
+                        <td>
+                            @if (order.Status is RepairStatus.Completed or RepairStatus.Cancelled)
+                            { <StatusBadge Value="@order.Status.ToString()" /> }
+                            else
+                            {
+                                <select class="status-select" value="@order.Status" aria-label="Status for order @order.Id" @onchange="args => SetStatusAsync(order.Id, args)">
+                                    @foreach (var status in AvailableStatuses) { <option value="@status">@StatusText.Format(status.ToString())</option> }
+                                </select>
+                            }
+                        </td>
+                        <td><a class="btn btn-sm btn-outline-secondary" href="/repairs/@order.Id">Details</a></td>
+                    </tr>
+                }
+            </tbody>
+        </table></div>
+    }
+</section>
+
+@code {
+    private List<RepairOrder> orders = [];
+    private List<Vehicle> vehicles = [];
+    private IList<ApplicationUser> mechanics = [];
+    private OrderForm form = new();
+    private bool isAdmin;
+    private bool showForm;
+    private string? userId;
+    private string? message;
+    private string? error;
+    private string statusFilter = "";
+    private IEnumerable<RepairStatus> AvailableStatuses => isAdmin
+        ? Enum.GetValues<RepairStatus>()
+        : [RepairStatus.InProgress, RepairStatus.WaitingForParts, RepairStatus.Completed];
+    private List<RepairOrder> FilteredOrders => orders.Where(order =>
+        string.IsNullOrEmpty(statusFilter) || order.Status.ToString() == statusFilter).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+        userId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        isAdmin = user.IsInRole(DemoDataSeeder.AdministratorRole);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var query = db.RepairOrders.Include(item => item.Vehicle).ThenInclude(item => item.Customer)
+            .Include(item => item.Mechanic).Include(item => item.Parts).ThenInclude(item => item.Part);
+        orders = await (isAdmin ? query : query.Where(item => item.MechanicId == userId))
+            .OrderByDescending(item => item.CreatedAt).ToListAsync();
+        if (isAdmin)
+        {
+            vehicles = await db.Vehicles.OrderBy(item => item.RegistrationNumber).ToListAsync();
+            mechanics = await UserManager.GetUsersInRoleAsync(DemoDataSeeder.MechanicRole);
+        }
+    }
+
+    private async Task CreateAsync()
+    {
+        error = message = null;
+        if (form.VehicleId == 0) { error = "Choose a vehicle."; return; }
+        try
+        {
+            await AutoCare.CreateRepairOrderAsync(new RepairOrder
+            {
+                VehicleId = form.VehicleId,
+                MechanicId = form.MechanicId,
+                Diagnosis = form.Diagnosis,
+                WorkDescription = form.WorkDescription,
+                LaborCost = form.LaborCost,
+                Status = RepairStatus.Pending
+            });
+            form = new OrderForm();
+            showForm = false;
+            message = "Repair order created.";
+            await LoadAsync();
+        }
+        catch (InvalidOperationException exception) { error = exception.Message; }
+    }
+
+    private async Task SetStatusAsync(int orderId, ChangeEventArgs args)
+    {
+        if (!Enum.TryParse<RepairStatus>(args.Value?.ToString(), out var status)) return;
+        error = message = null;
+        try
+        {
+            await AutoCare.UpdateRepairStatusAsync(orderId, status, userId ?? "", isAdmin);
+            message = "Repair status updated.";
+            await LoadAsync();
+        }
+        catch (InvalidOperationException exception) { error = exception.Message; }
+        catch (UnauthorizedAccessException exception) { error = exception.Message; }
+    }
+
+    private sealed class OrderForm
+    {
+        [Range(1, int.MaxValue, ErrorMessage = "Choose a vehicle.")]
+        public int VehicleId { get; set; }
+        public string? MechanicId { get; set; }
+        [StringLength(1000)]
+        public string Diagnosis { get; set; } = "";
+        [StringLength(2000)]
+        public string WorkDescription { get; set; } = "";
+        [Range(typeof(decimal), "0", "1000000")]
+        public decimal LaborCost { get; set; }
+    }
+}

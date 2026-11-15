@@ -1,0 +1,63 @@
+@page "/vehicles/{Id:int}"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+<PageTitle>Vehicle history · AutoCare</PageTitle>
+<a href="/vehicles" class="back-link">← All vehicles</a>
+@if (vehicle is null)
+{
+    <div class="panel empty-state"><strong>Vehicle not found</strong></div>
+}
+else
+{
+    <div class="page-heading">
+        <div><div class="eyebrow">VEHICLE PROFILE</div><h1>@vehicle.Year @vehicle.Make @vehicle.Model</h1><p class="muted">Owned by @vehicle.Customer.Name · <span class="code-chip">@vehicle.RegistrationNumber</span></p></div>
+    </div>
+    <div class="stat-grid two-stats">
+        <article class="stat-card"><span class="stat-label">Repair visits</span><strong>@history.Count</strong><span class="stat-note">Linked service records</span></article>
+        <article class="stat-card"><span class="stat-label">Lifetime repair total</span><strong>@history.Sum(order => order.TotalCost).ToString("C")</strong><span class="stat-note">Based on saved labor and parts</span></article>
+    </div>
+    <section class="panel">
+        <div class="panel-heading"><div><h2>Repair history</h2><p class="muted">Completed work and current repair records</p></div></div>
+        @if (history.Count == 0)
+        {
+            <div class="empty-state"><strong>No repair history yet</strong><p>Repair orders for this vehicle will appear here.</p></div>
+        }
+        else
+        {
+            <div class="table-wrap"><table class="data-table">
+                <thead><tr><th>Order</th><th>Date</th><th>Mechanic</th><th>Work performed</th><th>Parts</th><th>Total</th><th>Status</th></tr></thead>
+                <tbody>
+                    @foreach (var order in history)
+                    {
+                        <tr>
+                            <td><a href="/repairs/@order.Id">#RO-@order.Id.ToString("D4")</a></td>
+                            <td>@(order.CompletedAt?.ToLocalTime().ToString("MMM d, yyyy") ?? order.CreatedAt.ToLocalTime().ToString("MMM d, yyyy"))</td>
+                            <td>@(order.Mechanic?.DisplayName ?? "Unassigned")</td>
+                            <td>@(string.IsNullOrWhiteSpace(order.WorkDescription) ? order.Diagnosis : order.WorkDescription)</td>
+                            <td>@string.Join(", ", order.Parts.Select(item => $"{item.Part.Name} × {item.Quantity}"))</td>
+                            <td>@order.TotalCost.ToString("C")</td>
+                            <td><StatusBadge Value="@order.Status.ToString()" /></td>
+                        </tr>
+                    }
+                </tbody>
+            </table></div>
+        }
+    </section>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+    private Vehicle? vehicle;
+    private List<RepairOrder> history = [];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        vehicle = await db.Vehicles.Include(item => item.Customer).SingleOrDefaultAsync(item => item.Id == Id);
+        if (vehicle is not null)
+            history = await db.RepairOrders.Include(item => item.Mechanic).Include(item => item.Parts).ThenInclude(item => item.Part)
+                .Where(item => item.VehicleId == Id).OrderByDescending(item => item.CreatedAt).ToListAsync();
+    }
+}

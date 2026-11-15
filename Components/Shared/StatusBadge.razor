@@ -1,0 +1,6 @@
+<span class="status-badge status-@Value.ToLowerInvariant()">@StatusText.Format(Value)</span>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Value { get; set; } = "";
+}

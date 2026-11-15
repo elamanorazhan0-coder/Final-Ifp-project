@@ -1,0 +1,154 @@
+@page "/inventory"
+@rendermode InteractiveServer
+@attribute [Authorize(Roles = DemoDataSeeder.AdministratorRole)]
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AutoCareService AutoCare
+@inject IJSRuntime JS
+
+<PageTitle>Inventory · AutoCare</PageTitle>
+<div class="page-heading">
+    <div><div class="eyebrow">PARTS MANAGEMENT</div><h1>Spare parts</h1><p class="muted">Manage stock, unit pricing and low-stock alerts.</p></div>
+    <button class="btn btn-primary" @onclick="StartNew">＋ Add part</button>
+</div>
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert alert-success">@message</div> }
+@if (!string.IsNullOrWhiteSpace(error)) { <div class="alert alert-danger" role="alert">@error</div> }
+
+<div class="stat-grid two-stats">
+    <article class="stat-card"><span class="stat-label">Parts in catalogue</span><strong>@parts.Count</strong><span class="stat-note">Unique stock items</span></article>
+    <article class="stat-card @(lowStockCount > 0 ? "stat-warning" : "")"><span class="stat-label">Reorder alerts</span><strong>@lowStockCount</strong><span class="stat-note">At or below minimum stock</span></article>
+</div>
+<div class="content-grid inventory-grid">
+    <section class="panel">
+        <div class="panel-heading"><div><h2>Stock catalogue</h2><p class="muted">Search by item, SKU or description</p></div><input class="form-control search-box" placeholder="Search parts" @bind="search" @bind:event="oninput" aria-label="Search spare parts" /></div>
+        @if (FilteredParts.Count == 0) { <div class="empty-state"><strong>No parts found</strong><p>Add an item or adjust your search.</p></div> }
+        else
+        {
+            <div class="table-wrap"><table class="data-table">
+                <thead><tr><th>Part</th><th>SKU</th><th>In stock</th><th>Min.</th><th>Unit price</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var part in FilteredParts)
+                    {
+                        <tr class="@(part.IsLowStock ? "low-stock-row" : "")">
+                            <td><strong>@part.Name</strong><small>@part.Description</small></td>
+                            <td><span class="code-chip">@part.Sku</span></td>
+                            <td><strong>@part.Quantity</strong>@if (part.IsLowStock) { <small class="warning-text">Reorder needed</small> }</td>
+                            <td>@part.MinimumStock</td><td>@part.UnitPrice.ToString("C")</td>
+                            <td class="actions"><button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(part)">Edit</button><button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(part)">Delete</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table></div>
+        }
+    </section>
+    @if (showForm)
+    {
+        <section class="panel form-panel">
+            <div class="panel-heading"><div><h2>@(form.Id == 0 ? "Add a part" : "Edit part")</h2><p class="muted">SKU must be unique.</p></div></div>
+            <EditForm Model="form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator /><ValidationSummary />
+                <label class="form-label" for="name">Part name</label><InputText id="name" class="form-control" @bind-Value="form.Name" /><ValidationMessage For="() => form.Name" />
+                <label class="form-label" for="sku">SKU / code</label><InputText id="sku" class="form-control" @bind-Value="form.Sku" /><ValidationMessage For="() => form.Sku" />
+                <label class="form-label" for="description">Description</label><InputTextArea id="description" class="form-control" @bind-Value="form.Description" />
+                <div class="form-row">
+                    <div><label class="form-label" for="quantity">Quantity</label><InputNumber id="quantity" class="form-control" @bind-Value="form.Quantity" /></div>
+                    <div><label class="form-label" for="minimum">Minimum stock</label><InputNumber id="minimum" class="form-control" @bind-Value="form.MinimumStock" /></div>
+                </div>
+                <ValidationMessage For="() => form.Quantity" /><ValidationMessage For="() => form.MinimumStock" />
+                <label class="form-label" for="price">Unit price</label><InputNumber id="price" class="form-control" @bind-Value="form.UnitPrice" /><ValidationMessage For="() => form.UnitPrice" />
+                <div class="form-actions"><button class="btn btn-primary" type="submit">Save part</button><button class="btn btn-light" type="button" @onclick="CloseForm">Cancel</button></div>
+            </EditForm>
+        </section>
+    }
+</div>
+
+@code {
+    private List<Part> parts = [];
+    private PartForm form = new();
+    private bool showForm;
+    private string search = "";
+    private string? message;
+    private string? error;
+    private int lowStockCount => parts.Count(part => part.IsLowStock);
+    private List<Part> FilteredParts => parts.Where(part => string.IsNullOrWhiteSpace(search) ||
+        $"{part.Name} {part.Sku} {part.Description}".Contains(search, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        parts = await db.Parts.OrderBy(part => part.Name).ToListAsync();
+    }
+
+    private void StartNew()
+    {
+        form = new PartForm();
+        showForm = true;
+        error = null;
+    }
+
+    private void CloseForm() => showForm = false;
+
+    private void Edit(Part part)
+    {
+        form = new PartForm
+        {
+            Id = part.Id, Name = part.Name, Sku = part.Sku, Description = part.Description,
+            Quantity = part.Quantity, MinimumStock = part.MinimumStock, UnitPrice = part.UnitPrice
+        };
+        showForm = true;
+        message = error = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        message = error = null;
+        try
+        {
+            await AutoCare.SavePartAsync(new Part
+            {
+                Id = form.Id, Name = form.Name.Trim(), Sku = form.Sku.Trim().ToUpperInvariant(),
+                Description = form.Description, Quantity = form.Quantity, MinimumStock = form.MinimumStock,
+                UnitPrice = form.UnitPrice
+            });
+            form = new PartForm();
+            showForm = false;
+            message = "Inventory item saved.";
+            await LoadAsync();
+        }
+        catch (DbUpdateException)
+        {
+            error = "Could not save this item. Make sure its SKU is unique.";
+        }
+    }
+
+    private async Task DeleteAsync(Part part)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", $"Delete {part.Name} ({part.Sku})?")) return;
+        message = error = null;
+        try
+        {
+            await AutoCare.DeletePartAsync(part.Id);
+            message = "Inventory item deleted.";
+            await LoadAsync();
+        }
+        catch (InvalidOperationException exception) { error = exception.Message; }
+    }
+
+    private sealed class PartForm
+    {
+        public int Id { get; set; }
+        [Required, StringLength(120)]
+        public string Name { get; set; } = "";
+        [Required, StringLength(40)]
+        public string Sku { get; set; } = "";
+        [StringLength(500)]
+        public string? Description { get; set; }
+        [Range(0, 1000000)]
+        public int Quantity { get; set; }
+        [Range(0, 1000000)]
+        public int MinimumStock { get; set; } = 1;
+        [Range(typeof(decimal), "0", "1000000")]
+        public decimal UnitPrice { get; set; }
+    }
+}

@@ -1,0 +1,14 @@
+# AutoCare is an ASP.NET Core Blazor Server app. Netlify cannot run .NET servers,
+# so the app itself is hosted elsewhere (see DEPLOY.md). Netlify only serves a
+# small landing page from netlify-site/ so this URL no longer returns 404.
+[build]
+  publish = "netlify-site"
+  command = ""
+
+# After deploying the .NET app (e.g. to Render), you can send all Netlify
+# traffic straight to it by uncommenting and editing this redirect:
+# [[redirects]]
+#   from = "/*"
+#   to = "https://autocare.onrender.com/:splat"
+#   status = 301
+#   force = true

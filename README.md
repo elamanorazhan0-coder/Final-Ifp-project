@@ -23,6 +23,10 @@ dotnet run
 
 Open the localhost URL printed by `dotnet run`. At startup, AutoCare applies EF Core migrations and adds sample records if the database is empty. The SQLite database is `Data/app.db`; it can be removed while the app is stopped to recreate the demo data on the next launch.
 
+### Deployment
+
+Netlify cannot run .NET servers. Deploy the app with the included `Dockerfile` (e.g. Render via `render.yaml`) — see `DEPLOY.md`. Netlify serves only a landing page from `netlify-site/`.
+
 ### Demo accounts
 
 | Role | Email | Password |

@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+.git/
+.vs/
+.idea/
+.netlify/
+netlify-site/
+tests/
+Data/app.db*
+**/.DS_Store

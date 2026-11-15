@@ -1,0 +1,12 @@
+bin/
+obj/
+**/bin/
+**/obj/
+.vs/
+.idea/
+*.user
+*.suo
+Data/app.db
+Data/app.db-shm
+Data/app.db-wal
+TestResults/

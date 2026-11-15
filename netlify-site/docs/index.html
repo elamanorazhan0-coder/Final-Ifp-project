@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoCare — Car Service Platform</title>
+  <link rel="icon" href="favicon.png">
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+           font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+           background: #0f172a; color: #e2e8f0; }
+    main { max-width: 640px; padding: 2.5rem; margin: 1rem; border-radius: 16px;
+           background: #1e293b; box-shadow: 0 20px 50px rgba(0,0,0,.35); }
+    h1 { margin-top: 0; font-size: 2rem; }
+    h1 span { color: #38bdf8; }
+    p, li { line-height: 1.6; color: #cbd5e1; }
+    code { background: #0f172a; padding: .1rem .4rem; border-radius: 4px; }
+    a.btn { display: inline-block; margin-top: 1rem; padding: .7rem 1.2rem; border-radius: 8px;
+            background: #38bdf8; color: #0f172a; font-weight: 600; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Auto<span>Care</span></h1>
+    <p>Платформа для автосервиса: клиенты и автомобили, записи на обслуживание, заказ-наряды и склад запчастей.</p>
+    <p>Приложение написано на ASP.NET Core Blazor Server (.NET 10) и работает на хостинге с поддержкой .NET.
+       Netlify не запускает .NET-серверы, поэтому здесь размещена только эта страница.</p>
+    <ul>
+      <li>Запуск локально: <code>dotnet run</code></li>
+      <li>Демо-вход: <code>admin@autocare.local</code> / <code>AutoCare123!</code></li>
+    </ul>
+    <a class="btn" href="https://github.com/elamanorazhan0-coder/Final-Ifp-project">Исходный код на GitHub</a>
+  </main>
+</body>
+</html>
